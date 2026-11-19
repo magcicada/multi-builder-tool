@@ -4,6 +4,7 @@ import igentuman.mbtool.Mbtool;
 import igentuman.mbtool.util.ModUtil;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraftforge.network.NetworkRegistry;
+import net.minecraftforge.network.NetworkDirection;
 import net.minecraftforge.network.simple.SimpleChannel;
 
 public class NetworkHandler {
@@ -55,6 +56,12 @@ public class NetworkHandler {
             .consumerMainThread(MultibuilderContainerSetContentPacket::handle)
             .add();
 
+        INSTANCE.messageBuilder(ToggleIgnoreCollisionsPacket.class, packetId++)
+            .encoder(ToggleIgnoreCollisionsPacket::encode)
+            .decoder(ToggleIgnoreCollisionsPacket::decode)
+            .consumerMainThread(ToggleIgnoreCollisionsPacket::handle)
+            .add();
+
         if(ModUtil.isAe2Loaded()) {
             INSTANCE.messageBuilder(ToggleMeAccessPacket.class, packetId++)
                     .encoder(ToggleMeAccessPacket::encode)
@@ -73,6 +80,12 @@ public class NetworkHandler {
                     .decoder(PacketAE2PatternTransfer::decode)
                     .consumerMainThread(PacketAE2PatternTransfer::handle)
                     .add();
+
+            INSTANCE.messageBuilder(RequestStructureCraftPacket.class, packetId++, NetworkDirection.PLAY_TO_SERVER)
+                    .encoder(RequestStructureCraftPacket::encode)
+                    .decoder(RequestStructureCraftPacket::decode)
+                    .consumerMainThread(RequestStructureCraftPacket::handle)
+                    .add();
         }
         if(ModUtil.isJEILoaded()) {
             INSTANCE.messageBuilder(PacketJeiRecipeTransfer.class, packetId++)
@@ -81,5 +94,10 @@ public class NetworkHandler {
                     .consumerMainThread(PacketJeiRecipeTransfer::handle)
                     .add();
         }
+        INSTANCE.messageBuilder(SelectStructurePacket.class, packetId++, NetworkDirection.PLAY_TO_SERVER)
+                .encoder(SelectStructurePacket::encode)
+                .decoder(SelectStructurePacket::decode)
+                .consumerMainThread(SelectStructurePacket::handle)
+                .add();
     }
 }
