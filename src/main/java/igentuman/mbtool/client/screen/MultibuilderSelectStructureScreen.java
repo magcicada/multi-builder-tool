@@ -1,15 +1,21 @@
 package igentuman.mbtool.client.screen;
 
+import igentuman.mbtool.client.BlockReplacementState;
 import igentuman.mbtool.client.gui.BrowserScrollPanel;
+import igentuman.mbtool.client.gui.GuiTheme;
 import igentuman.mbtool.client.gui.StructureBrowserModel;
+import igentuman.mbtool.client.gui.ThemedButton;
 import igentuman.mbtool.client.gui.StructureBrowserModel.Entry;
 import igentuman.mbtool.client.gui.StructureBrowserModel.Folder;
 import igentuman.mbtool.client.render.MultiblockRenderer;
 import igentuman.mbtool.container.MultibuilderContainer;
+import igentuman.mbtool.config.MbtoolClientConfig;
 import igentuman.mbtool.container.MultibuilderSelectStructureContainer;
 import igentuman.mbtool.item.MultibuilderItem;
 import igentuman.mbtool.network.NetworkHandler;
 import igentuman.mbtool.network.RequestStructureCraftPacket;
+import igentuman.mbtool.network.CancelCraftingJobsPacket;
+import igentuman.mbtool.client.CraftingProgress;
 import igentuman.mbtool.network.SelectStructurePacket;
 import igentuman.mbtool.network.ToggleIgnoreCollisionsPacket;
 import igentuman.mbtool.network.ToggleMeAccessPacket;
@@ -103,8 +109,8 @@ public class MultibuilderSelectStructureScreen<T extends AbstractContainerMenu> 
         int cardHeight = Math.min(132, Math.max(84, cardWidth));
         MultiblockRenderer.setVisiblePreviewCount(columns * (contentHeight / (cardHeight + 3) + 2));
 
-        addRenderableWidget(Button.builder(__("gui.mbtool.inventory"), button -> showInventory())
-                .bounds(panelX + panelWidth - 82, panelY + 5, 76, 20).build());
+        addRenderableWidget(new ThemedButton(panelX + panelWidth - 82, panelY + 5, 76, 20,
+                __("gui.mbtool.inventory"), button -> showInventory()));
         autocraftButton = null;
         if (ModUtil.isAe2Loaded()) {
             addRenderableWidget(new ToggleButton(panelX + panelWidth - 123, panelY + 6, "gui.mbtool.me_access",
@@ -116,6 +122,9 @@ public class MultibuilderSelectStructureScreen<T extends AbstractContainerMenu> 
         addRenderableWidget(new ToggleButton(panelX + panelWidth - (ModUtil.isAe2Loaded() ? 142 : 104), panelY + 6,
                 "gui.mbtool.ignore_collisions", "minecraft:barrier", this::ignoreCollisions, this::toggleIgnoreCollisions,
                 ChatFormatting.GREEN, false));
+        addRenderableWidget(new ToggleButton(panelX + panelWidth - (ModUtil.isAe2Loaded() ? 161 : 123), panelY + 6,
+                "gui.mbtool.dark_mode", "D", MbtoolClientConfig::isDarkMode,
+                MbtoolClientConfig::toggleDarkMode, ChatFormatting.GREEN, false));
         search = new EditBox(font, panelX + 7, panelY + 28, panelWidth - 14, 16,
                 __("gui.mbtool.search_structures"));
         search.setMaxLength(128);
@@ -126,8 +135,8 @@ public class MultibuilderSelectStructureScreen<T extends AbstractContainerMenu> 
             applyFilter();
         });
         addRenderableWidget(search);
-        folderPanel = addRenderableWidget(new BrowserScrollPanel(panelX + 6, contentY, sidebarWidth,
-                contentHeight, 1, 16, 1, __("gui.mbtool.folders")) {
+        folderPanel = addRenderableWidget(new BrowserScrollPanel(panelX + 6, contentY, sidebarWidth + 12,
+                contentHeight, 1, 14, 1, __("gui.mbtool.folders")) {
             @Override
             protected Component entryNarration(int index) {
                 return folderLabel(index);
@@ -136,8 +145,10 @@ public class MultibuilderSelectStructureScreen<T extends AbstractContainerMenu> 
             @Override
             protected void renderEntry(GuiGraphics graphics, int index, int x, int y, int w, int h, boolean hovered) {
                 boolean selected = index == 0 ? folder == null : folders.get(index - 1).id().equals(folder);
-                bevel(graphics, x, y, w, h, selected ? 0xFF8B8B8B : hovered ? 0xFFAAAAAA : 0xFF999999, selected);
-                drawFitted(graphics, folderLabel(index).getString(), x + 4, y + (h - font.lineHeight) / 2, w - 8, selected ? 0xFFFFFF : 0xE0E0E0);
+                bevel(graphics, x, y, w + 18, h, GuiTheme.color(
+                        selected ? 0xFF8B8B8B : hovered ? 0xFFAAAAAA : 0xFF999999,
+                        selected ? 0xFF505050 : hovered ? 0xFF606060 : 0xFF3C3C3C), selected);
+                drawFitted(graphics, folderLabel(index).getString(), x + 4, y + (h - font.lineHeight) / 2+1, w - 6, selected ? 0xFFFFFF : 0xE0E0E0);
             }
 
             @Override
@@ -159,9 +170,10 @@ public class MultibuilderSelectStructureScreen<T extends AbstractContainerMenu> 
             protected void renderEntry(GuiGraphics graphics, int index, int x, int y, int w, int h, boolean hovered) {
                 Entry<MultiblockStructure> entry = filtered.get(index);
                 boolean selected = entry.sourceIndex() == selectedIndex;
-                bevel(graphics, x, y, w, h, hovered ? 0xFFA0A0A0 : 0xFF8B8B8B, selected);
+                bevel(graphics, x, y, w, h, GuiTheme.color(
+                        hovered ? 0xFFA0A0A0 : 0xFF8B8B8B, hovered ? 0xFF555555 : 0xFF3C3C3C), selected);
                 int previewHeight = h - 29;
-                graphics.fill(x + 3, y + 3, x + w - 3, y + previewHeight, 0xFF686868);
+                graphics.fill(x + 3, y + 3, x + w - 3, y + previewHeight, GuiTheme.color(0xFF686868, 0xFF282828));
                 graphics.enableScissor(x + 3, Math.max(getY(), y + 3), x + w - 3,
                         Math.min(getY() + getHeight(), y + previewHeight));
                 try {
@@ -171,12 +183,21 @@ public class MultibuilderSelectStructureScreen<T extends AbstractContainerMenu> 
                 }
                 drawFitted(graphics, entry.name(), x + 4, y + h - 24, w - 8, 0xFFFFFF);
                 drawFitted(graphics, entry.folderName(), x + 4, y + h - 12, w - 8, 0xD0D0D0);
-                if (hovered && craftAvailable()) renderCraftButton(graphics, x, y, w);
+                CraftingProgress.Summary progress = CraftingProgress.forStructure(entry.value().getName());
+                if (progress != null) {
+                    int top = y + previewHeight - 25;
+                    graphics.fill(x + 3, top - 2, x + w - 3, y + previewHeight, 0xC0000000);
+                    drawFitted(graphics, progress.status().getString(), x + 5, top, w - 10, 0xB5FFFF);
+                    drawFitted(graphics, progress.timing().getString(), x + 5, top + 11, w - 10, 0xFFFFFF);
+                }
+                if (hovered && (craftAvailable() || progress != null && progress.active())) renderCraftButton(graphics, x, y, w, progress);
             }
 
             @Override
             protected boolean clickEntry(int index, int x, int y, int w, int h, double mouseX, double mouseY) {
-                if (!craftAvailable() || !overCraftButton(x, y, w, mouseX, mouseY)) return false;
+                CraftingProgress.Summary progress = CraftingProgress.forStructure(filtered.get(index).value().getName());
+                if ((!craftAvailable() && (progress == null || !progress.active()))
+                        || !overCraftButton(x, y, w, mouseX, mouseY)) return false;
                 requestCraft(filtered.get(index));
                 return true;
             }
@@ -186,8 +207,11 @@ public class MultibuilderSelectStructureScreen<T extends AbstractContainerMenu> 
                 selectStructure(filtered.get(index));
             }
         });
-        addRenderableWidget(Button.builder(__("gui.done"), button -> onClose())
-                .bounds(panelX + panelWidth - 66, panelY + panelHeight - 23, 60, 20).build());
+        addRenderableWidget(new ThemedButton(panelX + panelWidth - 202, panelY + panelHeight - 23,
+                132, 20, __("gui.mbtool.block_replacements"),
+                button -> minecraft.setScreen(new BlockReplacementsScreen<>(this))));
+        addRenderableWidget(new ThemedButton(panelX + panelWidth - 66, panelY + panelHeight - 23,
+                60, 20, __("gui.done"), button -> onClose()));
         loadStructures();
         folderPanel.setScroll(folderScroll);
         grid.setScroll(gridScroll);
@@ -260,7 +284,7 @@ public class MultibuilderSelectStructureScreen<T extends AbstractContainerMenu> 
     }
 
     private int craftButtonWidth() {
-        return font.width(__("gui.mbtool.craft")) + 8;
+        return Math.max(font.width(__("gui.mbtool.craft")), font.width(__("gui.mbtool.crafting.cancel"))) + 8;
     }
 
     private boolean overCraftButton(int x, int y, int w, double mouseX, double mouseY) {
@@ -269,16 +293,21 @@ public class MultibuilderSelectStructureScreen<T extends AbstractContainerMenu> 
         return mouseX >= left && mouseX < left + craftButtonWidth() && mouseY >= top && mouseY < top + 13;
     }
 
-    private void renderCraftButton(GuiGraphics graphics, int x, int y, int w) {
+    private void renderCraftButton(GuiGraphics graphics, int x, int y, int w, CraftingProgress.Summary progress) {
         int width = craftButtonWidth();
         int left = x + w - width - 5;
         int top = y + 5;
         boolean hover = overCraftButton(x, y, w, mouseX, mouseY);
         BrowserScrollPanel.bevel(graphics, left, top, width, 13, hover ? 0xFF5F9EA0 : 0xFF3C6E71, false);
-        graphics.drawCenteredString(font, __("gui.mbtool.craft"), left + width / 2, top + 3, hover ? 0xFFFFA0 : 0xFFFFFF);
+        graphics.drawCenteredString(font, __(progress != null && progress.active() ? "gui.mbtool.crafting.cancel" : "gui.mbtool.craft"), left + width / 2, top + 3, hover ? 0xFFFFA0 : 0xFFFFFF);
     }
 
     private void requestCraft(Entry<MultiblockStructure> entry) {
+        CraftingProgress.Summary progress = CraftingProgress.forStructure(entry.value().getName());
+        if (progress != null && progress.active()) {
+            NetworkHandler.INSTANCE.sendToServer(new CancelCraftingJobsPacket(entry.value().getName()));
+            return;
+        }
         if (minecraft == null || !(toolStack().getItem() instanceof MultibuilderItem)) return;
         List<MultiblockStructure> current = MultiblocksProvider.getStructures();
         if (entry.sourceIndex() >= current.size() || current.get(entry.sourceIndex()) != entry.value()) {
@@ -286,7 +315,8 @@ public class MultibuilderSelectStructureScreen<T extends AbstractContainerMenu> 
             return;
         }
         minecraft.getSoundManager().play(SimpleSoundInstance.forUI(SoundEvents.UI_BUTTON_CLICK, 1.0F));
-        NetworkHandler.INSTANCE.sendToServer(new RequestStructureCraftPacket(menu.containerId, playerSlot, entry.sourceIndex()));
+        NetworkHandler.INSTANCE.sendToServer(new RequestStructureCraftPacket(menu.containerId, playerSlot, entry.sourceIndex(),
+                BlockReplacementState.snapshot()));
     }
 
     private void showInventory() {
@@ -339,16 +369,18 @@ public class MultibuilderSelectStructureScreen<T extends AbstractContainerMenu> 
         private final ChatFormatting enabledColor;
         private final boolean notice;
         private final ItemStack icon;
+        private final String iconText;
         private Boolean lastEnabled;
 
-        private ToggleButton(int x, int y, String key, String iconId, BooleanSupplier state, Runnable toggle,
+        private ToggleButton(int x, int y, String key, String iconIdOrText, BooleanSupplier state, Runnable toggle,
                              ChatFormatting enabledColor, boolean notice) {
             super(x, y, 18, 18, __(key), button -> toggle.run(), DEFAULT_NARRATION);
             this.key = key;
             this.state = state;
             this.enabledColor = enabledColor;
             this.notice = notice;
-            ResourceLocation id = ResourceLocation.tryParse(iconId);
+            iconText = iconIdOrText.contains(":") ? null : iconIdOrText;
+            ResourceLocation id = iconText == null ? ResourceLocation.tryParse(iconIdOrText) : null;
             var item = id == null ? null : ForgeRegistries.ITEMS.getValue(id);
             icon = item == null ? ItemStack.EMPTY : new ItemStack(item);
         }
@@ -367,8 +399,11 @@ public class MultibuilderSelectStructureScreen<T extends AbstractContainerMenu> 
                 lastEnabled = enabled;
             }
             BrowserScrollPanel.bevel(graphics, getX(), getY(), width, height,
-                    isHoveredOrFocused() ? 0xFFAAAAAA : enabled ? 0xFF8B8B8B : 0xFFC6C6C6, enabled);
+                    GuiTheme.color(isHoveredOrFocused() ? 0xFFAAAAAA : enabled ? 0xFF8B8B8B : 0xFFC6C6C6,
+                            isHoveredOrFocused() ? 0xFF606060 : enabled ? 0xFF505050 : 0xFF3C3C3C), enabled);
             if (!icon.isEmpty()) graphics.renderItem(icon, getX() + 1, getY() + 1);
+            if (iconText != null) graphics.drawCenteredString(font, iconText,
+                    getX() + width / 2, getY() + (height - font.lineHeight) / 2, 0xFFFFFF);
         }
     }
 
@@ -386,8 +421,10 @@ public class MultibuilderSelectStructureScreen<T extends AbstractContainerMenu> 
         this.mouseX = mouseX;
         this.mouseY = mouseY;
         renderBackground(graphics);
-        BrowserScrollPanel.bevel(graphics, panelX, panelY, panelWidth, panelHeight, 0xFFC6C6C6, false);
-        drawFitted(graphics, title.getString(), panelX + 7, panelY + 11, panelWidth - (ModUtil.isAe2Loaded() ? 158 : 117), 0x404040, false);
+        BrowserScrollPanel.bevel(graphics, panelX, panelY, panelWidth, panelHeight,
+                GuiTheme.color(0xFFC6C6C6, 0xFF383838), false);
+        drawFitted(graphics, title.getString(), panelX + 7, panelY + 11,
+                panelWidth - (ModUtil.isAe2Loaded() ? 177 : 136), GuiTheme.labelColor(), false);
         ItemStack stack = toolStack();
         selectedIndex = stack.hasTag() && stack.getTag().contains("recipe") && !stack.getTag().contains("runtimeStructure")
                 ? stack.getTag().getInt("recipe") : -1;
@@ -395,7 +432,7 @@ public class MultibuilderSelectStructureScreen<T extends AbstractContainerMenu> 
         super.render(graphics, mouseX, mouseY, partialTick);
         drawFitted(graphics, __("gui.mbtool.structure_count", filtered.size(),
                 totalStructures).getString(),
-                panelX + 7, panelY + panelHeight - 16, panelWidth - 80, 0x404040, false);
+                panelX + 7, panelY + panelHeight - 16, panelWidth - 214, GuiTheme.labelColor(), false);
         if (filtered.isEmpty()) graphics.drawCenteredString(font, __("gui.mbtool.no_matching_structures"),
                 grid.getX() + grid.getWidth() / 2, grid.getY() + grid.getHeight() / 2, 0xFFFFFF);
         renderBrowserTooltip(graphics, mouseX, mouseY);
@@ -403,8 +440,16 @@ public class MultibuilderSelectStructureScreen<T extends AbstractContainerMenu> 
 
     private void renderBrowserTooltip(GuiGraphics graphics, int mouseX, int mouseY) {
         int index = grid.hoveredIndex(mouseX, mouseY);
-        if (index >= 0 && craftAvailable()
+        CraftingProgress.Summary hoveredProgress = index < 0 ? null
+                : CraftingProgress.forStructure(filtered.get(index).value().getName());
+        if (index >= 0 && (craftAvailable() || hoveredProgress != null && hoveredProgress.active())
                 && overCraftButton(grid.entryX(index), grid.entryY(index), grid.getCellWidth(), mouseX, mouseY)) {
+            CraftingProgress.Summary progress = CraftingProgress.forStructure(filtered.get(index).value().getName());
+            if (progress != null && progress.active()) {
+                graphics.renderComponentTooltip(font, List.of(progress.status(), progress.timing(),
+                        __("gui.mbtool.crafting.cancel.descr").withStyle(ChatFormatting.GOLD)), mouseX, mouseY);
+                return;
+            }
             graphics.renderComponentTooltip(font, List.of(__("gui.mbtool.craft"),
                     __("gui.mbtool.craft.descr").withStyle(ChatFormatting.GOLD),
                     __("gui.mbtool.craft.notice").withStyle(ChatFormatting.GRAY)), mouseX, mouseY);

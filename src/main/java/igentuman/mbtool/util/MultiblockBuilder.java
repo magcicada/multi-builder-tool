@@ -2,8 +2,11 @@ package igentuman.mbtool.util;
 
 import igentuman.mbtool.config.MbtoolConfig;
 import igentuman.mbtool.integration.ae2.AE2Helper;
+import igentuman.mbtool.integration.ae2.StructureCraftingManager;
 import igentuman.mbtool.item.MultibuilderItem;
-import java.util.ArrayList;
+
+import java.util.*;
+
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.network.chat.Component;
@@ -24,11 +27,6 @@ import net.minecraft.util.RandomSource;
 import net.minecraft.world.phys.AABB;
 import net.minecraftforge.items.IItemHandler;
 
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Map;
-import java.util.Set;
-
 public class MultiblockBuilder {
     
     /**
@@ -43,11 +41,18 @@ public class MultiblockBuilder {
      */
     public static BuildResult buildMultiblock(Level level, Player player, ItemStack multibuilderStack, 
                                             MultiblockStructure structure, BlockPos centerPos, int rotation) {
-        
+        return buildMultiblock(level, player, multibuilderStack, structure, centerPos, rotation, BlockReplacementPreferences.EMPTY);
+    }
+
+    public static BuildResult buildMultiblock(Level level, Player player, ItemStack multibuilderStack,
+                                             MultiblockStructure structure, BlockPos centerPos, int rotation,
+                                             BlockReplacementPreferences preferences) {
         if (level.isClientSide) {
             return new BuildResult(false, Component.literal("Cannot build on client side"));
         }
         
+        var replacementGroups = BlockEquivalencyManager.getGroups();
+        preferences = preferences.validated(replacementGroups);
         boolean isCreative = player.isCreative();
         boolean ignoreCollisions = MultibuilderItem.isIgnoreCollisions(multibuilderStack);
 
@@ -159,10 +164,26 @@ public class MultiblockBuilder {
                 
                 Block requiredBlock = blockState.getBlock();
                 Block chosenBlock = null;
-                
+                Block preferred = preferences.preferred(requiredBlock, replacementGroups);
+                // A preferred ME block must beat even an exact block already in the tool.
+                if (preferred != null) {
+                    for (int i = 0; i < tempSlotCounts.length; i++) {
+                        if (tempSlotBlocks[i] == preferred && tempSlotCounts[i] > 0) {
+                            tempSlotCounts[i]--;
+                            chosenBlock = preferred;
+                            break;
+                        }
+                    }
+                    if (chosenBlock == null && hasME && tempAe2Counts.getOrDefault(preferred, 0) > 0) {
+                        tempAe2Counts.merge(preferred, -1, Integer::sum);
+                        blocksFromAE2ToExtract.merge(preferred, 1, Integer::sum);
+                        chosenBlock = preferred;
+                    }
+                }
+
                 // 1. Try to find the exact block in the multibuilder inventory
                 for (int i = 0; i < tempSlotCounts.length; i++) {
-                    if (tempSlotBlocks[i] == requiredBlock && tempSlotCounts[i] > 0) {
+                    if (chosenBlock == null && tempSlotBlocks[i] == requiredBlock && tempSlotCounts[i] > 0) {
                         tempSlotCounts[i]--;
                         chosenBlock = requiredBlock;
                         break;
@@ -219,7 +240,10 @@ public class MultiblockBuilder {
             // If there are missing blocks, attempt autocrafting if enabled
             if (!missingBlocks.isEmpty()) {
                 if (isMeAutocraftingEnabled(multibuilderStack)) {
-                    return attemptAutocrafting((ServerPlayer) player, missingBlocks);
+                    // Use the same combined request and AE2 confirmation as the GUI Craft button.
+                    // Include stored ME materials so AE2 can reserve them as part of the plan.
+                    StructureCraftingManager.request((ServerPlayer) player, multibuilderStack, structure, requiredBlocks, preferences);
+                    return new BuildResult(false, null);
                 } else {
                     // Return error for the first missing block
                     Map.Entry<Block, Integer> first = missingBlocks.entrySet().iterator().next();
@@ -273,14 +297,14 @@ public class MultiblockBuilder {
             BlockPos worldPos = centerPos.offset(rotatedRelativePos);
             BlockState rotatedBlockState = rotateBlockState(blockState, rotation);
             
-            // Apply block replacement if needed (skip for creative mode)
+            // Creative placement uses the same preference without requiring materials.
             BlockState finalBlockState = rotatedBlockState;
-            if (!isCreative) {
-                Block replacementBlock = plannedReplacements.get(relativePos);
-                if (replacementBlock != null && replacementBlock != rotatedBlockState.getBlock()) {
-                    // Create a new BlockState with the replacement block but try to preserve properties
-                    finalBlockState = createReplacementBlockState(rotatedBlockState, replacementBlock);
-                }
+            Block replacementBlock = isCreative
+                    ? preferences.preferred(blockState.getBlock(), replacementGroups)
+                    : plannedReplacements.get(relativePos);
+            if (replacementBlock != null && replacementBlock != rotatedBlockState.getBlock()) {
+                // Create a new BlockState with the replacement block but try to preserve properties.
+                finalBlockState = createReplacementBlockState(rotatedBlockState, replacementBlock);
             }
             
             // Place the block using player-respecting method
@@ -331,56 +355,6 @@ public class MultiblockBuilder {
     private static boolean isMeAutocraftingEnabled(ItemStack multibuilderStack) {
         if (!ModUtil.isAe2Loaded()) return false;
         return MultibuilderItem.isMeAutocraftingEnabled(multibuilderStack);
-    }
-
-    /**
-     * Attempts to request autocrafting for all missing blocks via the ME network.
-     * This method is fully non-blocking — it starts async calculations and polls
-     * for results on subsequent build attempts.
-     */
-    private static BuildResult attemptAutocrafting(ServerPlayer player, Map<Block, Integer> missingBlocks) {
-        boolean anyCalculating = false;
-        boolean anySubmitted = false;
-        boolean anyNewlyStarted = false;
-        java.util.List<Block> unrequestable = new ArrayList<>();
-
-        for (Map.Entry<Block, Integer> missing : missingBlocks.entrySet()) {
-            Block block = missing.getKey();
-            int amount = missing.getValue();
-
-            // First, check if there's already a tracked request for this block
-            if (AutocraftTracker.hasActiveRequest(player.getUUID(), block)) {
-                AutocraftTracker.CraftRequest request = AutocraftTracker.getRequest(player.getUUID(), block);
-                if (request.status == AutocraftTracker.RequestStatus.SUBMITTED) {
-                    anySubmitted = true;
-                } else {
-                    anyCalculating = true;
-                }
-                continue;
-            }
-
-            // No existing request — start a new async calculation
-            AE2Helper.AutocraftResult result = AE2Helper.startCraftingCalculation(player, block, amount);
-            if (result == AE2Helper.AutocraftResult.CALCULATING) {
-                anyNewlyStarted = true;
-            } else if (result == AE2Helper.AutocraftResult.ALREADY_REQUESTING) {
-                anySubmitted = true; // ME network is already crafting this
-            } else if (result == AE2Helper.AutocraftResult.NO_PATTERN) {
-                unrequestable.add(block);
-            }
-            // NO_GRID, FAILED — silently skip, will be reported below
-        }
-
-        if (!unrequestable.isEmpty()) {
-            return new BuildResult(false, Component.translatable("message.mbtool.autocrafting_no_pattern",
-                    unrequestable.get(0).getName()));
-        } else if (anyCalculating || anyNewlyStarted) {
-            return new BuildResult(false, Component.translatable("message.mbtool.crafting_in_progress"), true);
-        } else if (anySubmitted) {
-            return new BuildResult(false, Component.translatable("message.mbtool.autocrafting_requested"));
-        }
-
-        return new BuildResult(false, Component.translatable("message.mbtool.autocrafting_failed"));
     }
 
     private static boolean isAllowedMEAccess(ItemStack multibuilderStack) {

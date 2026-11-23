@@ -8,7 +8,7 @@ import net.minecraftforge.network.NetworkDirection;
 import net.minecraftforge.network.simple.SimpleChannel;
 
 public class NetworkHandler {
-    private static final String PROTOCOL_VERSION = "1";
+    private static final String PROTOCOL_VERSION = "3";
     
     public static final SimpleChannel INSTANCE = NetworkRegistry.newSimpleChannel(
         ResourceLocation.fromNamespaceAndPath(Mbtool.MODID, "main"),
@@ -20,7 +20,10 @@ public class NetworkHandler {
     private static int packetId = 0;
     
     public static void registerPackets() {
-        INSTANCE.messageBuilder(SyncMultibuilderParamsPacket.class, packetId++)
+        INSTANCE.messageBuilder(SyncBlockEquivalencyPacket.class, packetId++, NetworkDirection.PLAY_TO_CLIENT)
+                .encoder(SyncBlockEquivalencyPacket::encode).decoder(SyncBlockEquivalencyPacket::decode)
+                .consumerMainThread(SyncBlockEquivalencyPacket::handle).add();
+        INSTANCE.messageBuilder(SyncMultibuilderParamsPacket.class, packetId++, NetworkDirection.PLAY_TO_SERVER)
             .encoder(SyncMultibuilderParamsPacket::encode)
             .decoder(SyncMultibuilderParamsPacket::decode)
             .consumerMainThread(SyncMultibuilderParamsPacket::handle)
@@ -38,7 +41,7 @@ public class NetworkHandler {
             .consumerMainThread(SyncSingleStructurePacket::handle)
             .add();
             
-        INSTANCE.messageBuilder(SyncRuntimeStructurePacket.class, packetId++)
+        INSTANCE.messageBuilder(SyncRuntimeStructurePacket.class, packetId++, NetworkDirection.PLAY_TO_SERVER)
             .encoder(SyncRuntimeStructurePacket::encode)
             .decoder(SyncRuntimeStructurePacket::decode)
             .consumerMainThread(SyncRuntimeStructurePacket::handle)
@@ -63,6 +66,12 @@ public class NetworkHandler {
             .add();
 
         if(ModUtil.isAe2Loaded()) {
+            INSTANCE.messageBuilder(SyncCraftingJobsPacket.class, packetId++, NetworkDirection.PLAY_TO_CLIENT)
+                    .encoder(SyncCraftingJobsPacket::encode).decoder(SyncCraftingJobsPacket::decode)
+                    .consumerMainThread(SyncCraftingJobsPacket::handle).add();
+            INSTANCE.messageBuilder(CancelCraftingJobsPacket.class, packetId++, NetworkDirection.PLAY_TO_SERVER)
+                    .encoder(CancelCraftingJobsPacket::encode).decoder(CancelCraftingJobsPacket::decode)
+                    .consumerMainThread(CancelCraftingJobsPacket::handle).add();
             INSTANCE.messageBuilder(ToggleMeAccessPacket.class, packetId++)
                     .encoder(ToggleMeAccessPacket::encode)
                     .decoder(ToggleMeAccessPacket::decode)
